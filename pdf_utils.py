@@ -1,16 +1,25 @@
 from pathlib import Path
 from io import BytesIO
 from datetime import date, datetime
+
 from reportlab.pdfgen import canvas
 from reportlab.lib.colors import lightgrey, red, blue
 from pypdf import PdfReader, PdfWriter
 
+
+# =========================================================
+# RUTAS
+# =========================================================
 BASE_DIR = Path(__file__).parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 OUTPUT_DIR = BASE_DIR / "output"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+
+# =========================================================
+# MESES
+# =========================================================
 MESES_ES = {
     1: "Enero",
     2: "Febrero",
@@ -28,14 +37,57 @@ MESES_ES = {
 
 
 # =========================================================
+# EMPRESA CAPACITADORA SEGÚN LA PLANTILLA
+# =========================================================
+def obtener_empresa_capacitadora(nombre_plantilla):
+    """
+    Determina el nombre de la empresa que debe aparecer
+    en el renglón de capacitador de acuerdo con la plantilla.
+
+    DIFARMER     -> DIFARMER
+    PHARMACEUTIX -> PHARMACEUTIX
+    FARMASI      -> OPEFAR
+    DABRA        -> OPEFAR
+    """
+
+    referencia = str(nombre_plantilla).strip().upper()
+
+    if "DIFARMER" in referencia:
+        return "DIFARMER"
+
+    if "PHARMACEUTIX" in referencia:
+        return "PHARMACEUTIX"
+
+    if "FARMASI" in referencia or "DABRA" in referencia:
+        return "OPEFAR"
+
+    if "OPEFAR" in referencia:
+        return "OPEFAR"
+
+    # Si aparece una plantilla distinta, evita dejar el campo vacío.
+    return "OPEFAR"
+
+
+# =========================================================
 # FUNCIONES DE TEXTO
 # =========================================================
-def split_text_to_lines(text, canvas_obj, font_name, font_size, max_width, max_lines=2):
+def split_text_to_lines(
+    text,
+    canvas_obj,
+    font_name,
+    font_size,
+    max_width,
+    max_lines=2
+):
     """
     Divide un texto en líneas según el ancho máximo.
-    Si excede max_lines, recorta la última con '...'
+
+    Si excede max_lines, recorta la última línea con puntos
+    suspensivos.
     """
+
     words = str(text).split()
+
     if not words:
         return [""]
 
@@ -44,7 +96,12 @@ def split_text_to_lines(text, canvas_obj, font_name, font_size, max_width, max_l
 
     for word in words[1:]:
         test_line = current_line + " " + word
-        test_width = canvas_obj.stringWidth(test_line, font_name, font_size)
+
+        test_width = canvas_obj.stringWidth(
+            test_line,
+            font_name,
+            font_size
+        )
 
         if test_width <= max_width:
             current_line = test_line
@@ -58,7 +115,15 @@ def split_text_to_lines(text, canvas_obj, font_name, font_size, max_width, max_l
         lines = lines[:max_lines]
 
         last = lines[-1]
-        while canvas_obj.stringWidth(last + "...", font_name, font_size) > max_width and len(last) > 0:
+
+        while (
+            canvas_obj.stringWidth(
+                last + "...",
+                font_name,
+                font_size
+            ) > max_width
+            and len(last) > 0
+        ):
             last = last[:-1].rstrip()
 
         lines[-1] = last + "..."
@@ -80,10 +145,13 @@ def draw_text_in_box(
 ):
     """
     Dibuja texto dentro de un área de ancho fijo.
-    - Si cabe en una línea, se puede mover verticalmente con single_line_y_shift
-    - Si no, usa hasta 2 líneas
-    - Si aún excede, corta con '...'
+
+    Si cabe en una línea, se puede mover verticalmente con
+    single_line_y_shift.
+
+    Si no cabe, utiliza hasta dos líneas.
     """
+
     c.setFont(font_name, font_size)
 
     lines = split_text_to_lines(
@@ -95,11 +163,17 @@ def draw_text_in_box(
         max_lines=max_lines
     )
 
-    # Si solo hay una línea, aplicamos ajuste vertical
-    y_base = y + single_line_y_shift if len(lines) == 1 else y
+    if len(lines) == 1:
+        y_base = y + single_line_y_shift
+    else:
+        y_base = y
 
     for i, line in enumerate(lines):
-        c.drawString(x, y_base - (i * line_spacing), line)
+        c.drawString(
+            x,
+            y_base - (i * line_spacing),
+            line
+        )
 
 
 def draw_text_in_box_centered(
@@ -116,9 +190,11 @@ def draw_text_in_box_centered(
 ):
     """
     Dibuja texto centrado horizontalmente dentro de un área.
-    Si ocupa 2 líneas, ambas quedan centradas.
+
+    Si ocupa dos líneas, ambas quedan centradas.
     También centra verticalmente el bloque dentro del área.
     """
+
     width = x_right - x_left
     c.setFont(font_name, font_size)
 
@@ -136,10 +212,20 @@ def draw_text_in_box_centered(
     start_y = y_center + (total_block_height / 2)
 
     for i, line in enumerate(lines):
-        line_width = c.stringWidth(line, font_name, font_size)
+        line_width = c.stringWidth(
+            line,
+            font_name,
+            font_size
+        )
+
         x_line = x_left + (width - line_width) / 2
         y_line = start_y - (i * line_spacing)
-        c.drawString(x_line, y_line, line)
+
+        c.drawString(
+            x_line,
+            y_line,
+            line
+        )
 
 
 def draw_text_centered_single_line(
@@ -152,13 +238,23 @@ def draw_text_centered_single_line(
     font_size=9.5
 ):
     """
-    Dibuja una sola línea centrada horizontalmente dentro de un área.
+    Dibuja una sola línea centrada horizontalmente
+    dentro de un área.
     """
+
     c.setFont(font_name, font_size)
+
     text = str(text)
-    text_width = c.stringWidth(text, font_name, font_size)
+
+    text_width = c.stringWidth(
+        text,
+        font_name,
+        font_size
+    )
+
     area_width = x_right - x_left
     x = x_left + (area_width - text_width) / 2
+
     c.drawString(x, y, text)
 
 
@@ -167,19 +263,38 @@ def draw_text_centered_single_line(
 # =========================================================
 def normalizar_fecha(fecha):
     """
-    Acepta date, datetime o texto YYYY-MM-DD / DD/MM/YYYY.
-    Devuelve (anio, mes_texto, dia_texto)
+    Acepta:
+
+    - date
+    - datetime
+    - texto YYYY-MM-DD
+    - texto DD/MM/YYYY
+
+    Devuelve:
+    (año, mes en texto, día)
     """
+
     if isinstance(fecha, datetime):
         fecha_obj = fecha.date()
+
     elif isinstance(fecha, date):
         fecha_obj = fecha
+
     elif isinstance(fecha, str):
         fecha = fecha.strip()
+
         try:
-            fecha_obj = datetime.strptime(fecha, "%Y-%m-%d").date()
+            fecha_obj = datetime.strptime(
+                fecha,
+                "%Y-%m-%d"
+            ).date()
+
         except ValueError:
-            fecha_obj = datetime.strptime(fecha, "%d/%m/%Y").date()
+            fecha_obj = datetime.strptime(
+                fecha,
+                "%d/%m/%Y"
+            ).date()
+
     else:
         raise ValueError("Formato de fecha no soportado.")
 
@@ -200,31 +315,69 @@ def crear_overlay_dc3(
     curp,
     puesto,
     curso,
-    capacitador,
+    empresa_capacitadora,
+    capacitador_firma,
     fecha
 ):
     """
-    Crea la capa PDF con datos reales sobre la página 1.
-    """
-    packet = BytesIO()
-    c = canvas.Canvas(packet, pagesize=(page_width, page_height))
+    Crea la capa PDF con los datos reales sobre la página 1.
 
-    # ---------------- DATOS PRINCIPALES ----------------
+    empresa_capacitadora:
+        Nombre de la empresa que aparece en el renglón
+        del capacitador.
+
+    capacitador_firma:
+        Nombre completo del capacitador que aparece
+        en el apartado de firma.
+    """
+
+    packet = BytesIO()
+
+    c = canvas.Canvas(
+        packet,
+        pagesize=(page_width, page_height)
+    )
+
+    # -----------------------------------------------------
+    # DATOS PRINCIPALES
+    # -----------------------------------------------------
     c.setFont("Helvetica", 9.5)
 
-    # Nombre (desde Nombrecompleto)
-    c.drawString(30, 615, str(nombre_completo))
+    # Nombre del participante
+    c.drawString(
+        30,
+        615,
+        str(nombre_completo)
+    )
 
-    # CURP (desde CURP)
-    c.drawString(30, 585, str(curp))
+    # CURP
+    c.drawString(
+        30,
+        585,
+        str(curp)
+    )
 
-    # Puesto (desde Puesto)
-    c.drawString(30, 555, str(puesto))
+    # Puesto
+    c.drawString(
+        30,
+        555,
+        str(puesto)
+    )
 
-    # Capacitador en posición normal
-    c.drawString(30, 325, str(capacitador))
+    # -----------------------------------------------------
+    # EMPRESA EN EL RENGLÓN DE CAPACITADOR
+    # -----------------------------------------------------
+    # Aquí aparecerá:
+    # DIFARMER, PHARMACEUTIX u OPEFAR
+    c.drawString(
+        30,
+        325,
+        str(empresa_capacitadora)
+    )
 
-    # ---------------- CURSO EN ÁREA DE TEXTO ----------------
+    # -----------------------------------------------------
+    # CURSO EN ÁREA DE TEXTO
+    # -----------------------------------------------------
     CURSO_X = 30
     CURSO_Y = 425
     CURSO_WIDTH = 520
@@ -242,13 +395,15 @@ def crear_overlay_dc3(
         single_line_y_shift=-10
     )
 
-    # ---------------- CAPACITADOR EN FIRMA (CENTRADO) ----------------
-    # Área:
+    # -----------------------------------------------------
+    # NOMBRE COMPLETO DEL CAPACITADOR EN LA FIRMA
+    # -----------------------------------------------------
+    # Área de la firma:
     # x = 40 a 190
     # y = 220 a 240
     draw_text_in_box_centered(
         c,
-        text=str(capacitador),
+        text=str(capacitador_firma),
         x_left=40,
         x_right=190,
         y_bottom=220,
@@ -259,48 +414,73 @@ def crear_overlay_dc3(
         line_spacing=8
     )
 
-    # ---------------- FECHA 1 Y FECHA 2 (MISMAS) ----------------
+    # -----------------------------------------------------
+    # FECHA 1 Y FECHA 2
+    # -----------------------------------------------------
     anio, mes, dia = normalizar_fecha(fecha)
 
     y_fecha = 385
     desplazamiento_segunda_fecha = 165
 
-    # Primera fecha
+    # Primera fecha: año
     draw_text_centered_single_line(
-        c, anio,
-        x_left=270, x_right=310, y=y_fecha,
-        font_name="Helvetica", font_size=9.5
-    )
-    draw_text_centered_single_line(
-        c, mes,
-        x_left=320, x_right=380, y=y_fecha,
-        font_name="Helvetica", font_size=9.5
-    )
-    draw_text_centered_single_line(
-        c, dia,
-        x_left=390, x_right=420, y=y_fecha,
-        font_name="Helvetica", font_size=9.5
+        c,
+        anio,
+        x_left=270,
+        x_right=310,
+        y=y_fecha,
+        font_name="Helvetica",
+        font_size=9.5
     )
 
-    # Segunda fecha (mismo valor)
+    # Primera fecha: mes
     draw_text_centered_single_line(
-        c, anio,
+        c,
+        mes,
+        x_left=320,
+        x_right=380,
+        y=y_fecha,
+        font_name="Helvetica",
+        font_size=9.5
+    )
+
+    # Primera fecha: día
+    draw_text_centered_single_line(
+        c,
+        dia,
+        x_left=390,
+        x_right=420,
+        y=y_fecha,
+        font_name="Helvetica",
+        font_size=9.5
+    )
+
+    # Segunda fecha: año
+    draw_text_centered_single_line(
+        c,
+        anio,
         x_left=270 + desplazamiento_segunda_fecha,
         x_right=310 + desplazamiento_segunda_fecha,
         y=y_fecha,
         font_name="Helvetica",
         font_size=9.5
     )
+
+    # Segunda fecha: mes
     draw_text_centered_single_line(
-        c, mes,
+        c,
+        mes,
         x_left=320 + desplazamiento_segunda_fecha,
         x_right=380 + desplazamiento_segunda_fecha,
         y=y_fecha,
         font_name="Helvetica",
         font_size=9.5
     )
+
+    # Segunda fecha: día
     draw_text_centered_single_line(
-        c, dia,
+        c,
+        dia,
         x_left=390 + desplazamiento_segunda_fecha,
         x_right=420 + desplazamiento_segunda_fecha,
         y=y_fecha,
@@ -309,22 +489,38 @@ def crear_overlay_dc3(
     )
 
     c.save()
+
     packet.seek(0)
+
     return packet
 
 
 # =========================================================
 # OVERLAY GRID
 # =========================================================
-def crear_overlay_grid(page_width, page_height, step=10):
+def crear_overlay_grid(
+    page_width,
+    page_height,
+    step=10
+):
     """
-    Crea una rejilla de coordenadas para ayudarte a ubicar los campos.
+    Crea una rejilla de coordenadas para ayudarte
+    a ubicar los campos.
     """
+
     packet = BytesIO()
-    c = canvas.Canvas(packet, pagesize=(page_width, page_height))
+
+    c = canvas.Canvas(
+        packet,
+        pagesize=(page_width, page_height)
+    )
 
     # Líneas verticales
-    for x in range(0, int(page_width) + 1, step):
+    for x in range(
+        0,
+        int(page_width) + 1,
+        step
+    ):
         c.setStrokeColor(lightgrey)
         c.setLineWidth(0.2)
         c.line(x, 0, x, page_height)
@@ -332,11 +528,23 @@ def crear_overlay_grid(page_width, page_height, step=10):
         if x % 50 == 0:
             c.setFillColor(red)
             c.setFont("Helvetica", 6)
-            c.drawString(x + 1, page_height - 10, str(x))
-            c.drawString(x + 1, 2, str(x))
+            c.drawString(
+                x + 1,
+                page_height - 10,
+                str(x)
+            )
+            c.drawString(
+                x + 1,
+                2,
+                str(x)
+            )
 
     # Líneas horizontales
-    for y in range(0, int(page_height) + 1, step):
+    for y in range(
+        0,
+        int(page_height) + 1,
+        step
+    ):
         c.setStrokeColor(lightgrey)
         c.setLineWidth(0.2)
         c.line(0, y, page_width, y)
@@ -344,8 +552,16 @@ def crear_overlay_grid(page_width, page_height, step=10):
         if y % 50 == 0:
             c.setFillColor(blue)
             c.setFont("Helvetica", 6)
-            c.drawString(2, y + 1, str(y))
-            c.drawString(page_width - 28, y + 1, str(y))
+            c.drawString(
+                2,
+                y + 1,
+                str(y)
+            )
+            c.drawString(
+                page_width - 28,
+                y + 1,
+                str(y)
+            )
 
     c.setFillColor(red)
     c.setFont("Helvetica-Bold", 8)
@@ -353,6 +569,7 @@ def crear_overlay_grid(page_width, page_height, step=10):
 
     c.save()
     packet.seek(0)
+
     return packet
 
 
@@ -370,25 +587,46 @@ def generar_dc3(
     output_filename="dc3_generada.pdf"
 ):
     """
-    Genera una constancia DC3 real:
-    - usa la plantilla PDF base
-    - llena solo la página 1
-    - conserva intacta la página 2
+    Genera una constancia DC3 real.
+
+    Mantiene los mismos parámetros que utilizaba la aplicación.
+
+    El parámetro capacitador conserva el nombre completo de
+    la persona capacitadora y se utiliza en la firma.
+
+    La empresa que aparece en el renglón del capacitador se
+    determina automáticamente con nombre_plantilla.
     """
+
     plantilla_path = TEMPLATES_DIR / nombre_plantilla
 
     if not plantilla_path.exists():
-        raise FileNotFoundError(f"No se encontró la plantilla: {plantilla_path}")
+        raise FileNotFoundError(
+            f"No se encontró la plantilla: {plantilla_path}"
+        )
+
+    # Obtener automáticamente la empresa capacitadora
+    empresa_capacitadora = obtener_empresa_capacitadora(
+        nombre_plantilla
+    )
 
     reader = PdfReader(str(plantilla_path))
     writer = PdfWriter()
 
     if len(reader.pages) < 2:
-        raise ValueError("La plantilla debe tener al menos 2 páginas.")
+        raise ValueError(
+            "La plantilla debe tener al menos 2 páginas."
+        )
 
     page1 = reader.pages[0]
-    page_width = float(page1.mediabox.width)
-    page_height = float(page1.mediabox.height)
+
+    page_width = float(
+        page1.mediabox.width
+    )
+
+    page_height = float(
+        page1.mediabox.height
+    )
 
     overlay_pdf = PdfReader(
         crear_overlay_dc3(
@@ -398,10 +636,17 @@ def generar_dc3(
             curp=curp,
             puesto=puesto,
             curso=curso,
-            capacitador=capacitador,
+
+            # Empresa basada en la plantilla
+            empresa_capacitadora=empresa_capacitadora,
+
+            # Nombre completo para la firma
+            capacitador_firma=capacitador,
+
             fecha=fecha
         )
     )
+
     overlay_page = overlay_pdf.pages[0]
 
     page1.merge_page(overlay_page)
@@ -412,6 +657,7 @@ def generar_dc3(
     writer.add_page(page2)
 
     output_path = OUTPUT_DIR / output_filename
+
     with open(output_path, "wb") as f:
         writer.write(f)
 
@@ -421,27 +667,47 @@ def generar_dc3(
 # =========================================================
 # GUÍA DE COORDENADAS
 # =========================================================
-def generar_guia_coordenadas(nombre_plantilla="DIFARMER_base.pdf"):
+def generar_guia_coordenadas(
+    nombre_plantilla="DIFARMER_base.pdf"
+):
     """
-    Genera un PDF con rejilla de coordenadas sobre la página 1
-    y conserva la página 2 intacta.
+    Genera un PDF con una rejilla de coordenadas sobre
+    la página 1 y conserva la página 2 intacta.
     """
+
     plantilla_path = TEMPLATES_DIR / nombre_plantilla
 
     if not plantilla_path.exists():
-        raise FileNotFoundError(f"No se encontró la plantilla: {plantilla_path}")
+        raise FileNotFoundError(
+            f"No se encontró la plantilla: {plantilla_path}"
+        )
 
     reader = PdfReader(str(plantilla_path))
     writer = PdfWriter()
 
     if len(reader.pages) < 2:
-        raise ValueError("La plantilla debe tener al menos 2 páginas.")
+        raise ValueError(
+            "La plantilla debe tener al menos 2 páginas."
+        )
 
     page1 = reader.pages[0]
-    page_width = float(page1.mediabox.width)
-    page_height = float(page1.mediabox.height)
 
-    overlay_pdf = PdfReader(crear_overlay_grid(page_width, page_height, step=10))
+    page_width = float(
+        page1.mediabox.width
+    )
+
+    page_height = float(
+        page1.mediabox.height
+    )
+
+    overlay_pdf = PdfReader(
+        crear_overlay_grid(
+            page_width,
+            page_height,
+            step=10
+        )
+    )
+
     overlay_page = overlay_pdf.pages[0]
 
     page1.merge_page(overlay_page)
@@ -451,7 +717,10 @@ def generar_guia_coordenadas(nombre_plantilla="DIFARMER_base.pdf"):
     page2 = reader.pages[1]
     writer.add_page(page2)
 
-    output_path = OUTPUT_DIR / "dc3_guia_coordenadas.pdf"
+    output_path = (
+        OUTPUT_DIR / "dc3_guia_coordenadas.pdf"
+    )
+
     with open(output_path, "wb") as f:
         writer.write(f)
 
@@ -467,12 +736,24 @@ if __name__ == "__main__":
         curp="BOCJ900101HSRXXX00",
         puesto="AUXILIAR DE FORMACION Y DESARROLLO",
         curso="BRIGADAS MULTIFUNCIONALES",
+
+        # Este nombre aparecerá en la firma
         capacitador="ANA PAOLA PADILLA QUINTERO",
+
         fecha="03/06/2026",
+
+        # Esta plantilla hará que en el renglón aparezca DIFARMER
         nombre_plantilla="DIFARMER_base.pdf",
+
         output_filename="dc3_real_prueba.pdf"
     )
-    print(f"PDF real de prueba generado en: {ruta}")
+
+    print(
+        f"PDF real de prueba generado en: {ruta}"
+    )
 
     ruta_guia = generar_guia_coordenadas()
-    print(f"Guía de coordenadas generada en: {ruta_guia}")
+
+    print(
+        f"Guía de coordenadas generada en: {ruta_guia}"
+    )
