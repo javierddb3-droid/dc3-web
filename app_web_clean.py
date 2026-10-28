@@ -1,510 +1,796 @@
-import re
 from pathlib import Path
-from datetime import datetime, timedelta
+from io import BytesIO
+from datetime import date, datetime
 
-import pandas as pd
-import streamlit as st
+from reportlab.pdfgen import canvas
+from reportlab.lib.colors import lightgrey, red, blue
 from pypdf import PdfReader, PdfWriter
 
-from catalogos import EMPRESAS, CURSOS_POR_AREA, CAPACITADORES_POR_AREA
-from pdf_utils import generar_dc3
-
-st.set_page_config(page_title="DC3 Web", layout="wide")
 
 # =========================================================
 # RUTAS
 # =========================================================
 BASE_DIR = Path(__file__).parent
+TEMPLATES_DIR = BASE_DIR / "templates"
 OUTPUT_DIR = BASE_DIR / "output"
+
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+
 # =========================================================
-# ESTADO
+# MESES
 # =========================================================
-if "selected_ids" not in st.session_state:
-    st.session_state.selected_ids = set()
-
-if "nombre_search_reset" not in st.session_state:
-    st.session_state.nombre_search_reset = 0
-
-if "last_file_signature" not in st.session_state:
-    st.session_state.last_file_signature = None
-
-if "pdf_generado" not in st.session_state:
-    st.session_state.pdf_generado = False
-
-if "pdf_bytes" not in st.session_state:
-    st.session_state.pdf_bytes = None
-
-if "pdf_filename" not in st.session_state:
-    st.session_state.pdf_filename = None
-
-st.title("Generador DC3 Web")
+MESES_ES = {
+    1: "Enero",
+    2: "Febrero",
+    3: "Marzo",
+    4: "Abril",
+    5: "Mayo",
+    6: "Junio",
+    7: "Julio",
+    8: "Agosto",
+    9: "Septiembre",
+    10: "Octubre",
+    11: "Noviembre",
+    12: "Diciembre",
+}
 
 
 # =========================================================
-# FUNCIONES
+# EMPRESA CAPACITADORA SEGÚN LA PLANTILLA
 # =========================================================
-def generar_fechas_automaticas(cursos, fecha_inicial):
-    fechas = []
-    fecha_actual = fecha_inicial
-    cursos_en_dia = 0
+def obtener_empresa_capacitadora(nombre_plantilla):
+    """
+    Determina el nombre de la empresa que debe aparecer
+    en el renglón de capacitador según la plantilla utilizada.
 
-    for _ in cursos:
-        while fecha_actual.weekday() == 6:  # domingo
-            fecha_actual += timedelta(days=1)
+    DIFARMER     -> DIFARMER
+    PHARMACEUTIX -> PHARMACEUTIX
+    FARMASI      -> OPEFAR
+    DABRA        -> OPEFAR
+    """
 
-        fechas.append(fecha_actual)
-        cursos_en_dia += 1
+    referencia = str(nombre_plantilla).strip().upper()
 
-        if cursos_en_dia == 2:
-            fecha_actual += timedelta(days=1)
-            cursos_en_dia = 0
+    if "DIFARMER" in referencia:
+        return "DIFARMER"
 
-    return fechas
+    if "PHARMACEUTIX" in referencia:
+        return "PHARMACEUTIX"
 
+    if "FARMASI" in referencia or "DABRA" in referencia:
+        return "OPEFAR"
 
-def preparar_dataframe(df):
-    df = df.copy().reset_index(drop=False).rename(columns={"index": "__rowid"})
+    if "OPEFAR" in referencia:
+        return "OPEFAR"
 
-    # Nombre visible en pantalla
-    if "Nombre" in df.columns:
-        df["__display_name"] = df["Nombre"].astype(str).fillna("").str.strip()
-    elif "Nombrecompleto" in df.columns:
-        df["__display_name"] = df["Nombrecompleto"].astype(str).fillna("").str.strip()
-    else:
-        df["__display_name"] = ""
-
-    # Nombre real para constancia
-    if "Nombrecompleto" not in df.columns and "Nombre" in df.columns:
-        df["Nombrecompleto"] = df["Nombre"].astype(str).fillna("").str.strip()
-
-    # ID único por fila
-    df["__uid"] = df["__rowid"].astype(str)
-
-    if "Sucursal" not in df.columns:
-        df["Sucursal"] = ""
-
-    return df
-
-
-def safe_filename(texto):
-    texto = str(texto).strip()
-    texto = re.sub(r"[^\w\s-]", "", texto, flags=re.UNICODE)
-    texto = re.sub(r"\s+", "_", texto)
-    return texto[:80] if texto else "archivo"
+    # Valor predeterminado si aparece otra plantilla
+    return "OPEFAR"
 
 
 # =========================================================
-# SIDEBAR PRINCIPAL (ACCIONES)
+# FUNCIONES DE TEXTO
 # =========================================================
-with st.sidebar:
-    st.header("Acciones")
+def split_text_to_lines(
+    text,
+    canvas_obj,
+    font_name,
+    font_size,
+    max_width,
+    max_lines=2
+):
+    """
+    Divide un texto en líneas según el ancho máximo.
+    Si excede max_lines, recorta la última línea con "...".
+    """
 
-    btn_generar = st.button("🚀 Generar PDF", use_container_width=True)
+    words = str(text).split()
 
-    st.markdown("---")
-    st.subheader("Progreso")
+    if not words:
+        return [""]
 
-    progreso_placeholder = st.empty()
-    estado_placeholder = st.empty()
-    descarga_placeholder = st.empty()
+    lines = []
+    current_line = words[0]
 
-    progreso_placeholder.progress(0)
-    estado_placeholder.info("Esperando validación para generar.")
+    for word in words[1:]:
+        test_line = current_line + " " + word
 
-    # Si ya existe un PDF generado, mostrar botón de descarga
-    if st.session_state.pdf_bytes is not None and st.session_state.pdf_filename is not None:
-        descarga_placeholder.download_button(
-            "⬇ Descargar PDF FINAL",
-            data=st.session_state.pdf_bytes,
-            file_name=st.session_state.pdf_filename,
-            mime="application/pdf",
-            use_container_width=True,
-            key="download_pdf_sidebar_fijo"
+        test_width = canvas_obj.stringWidth(
+            test_line,
+            font_name,
+            font_size
         )
 
-
-# =========================================================
-# CONFIGURACIÓN
-# =========================================================
-st.markdown("## Configuración de la capacitación")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    empresa = st.selectbox("Empresa", list(EMPRESAS.keys()))
-    area = st.selectbox("Área de Capacitación", list(CURSOS_POR_AREA.keys()))
-
-with col2:
-    cursos_opciones = CURSOS_POR_AREA[area] + ["[OTRO CURSO]"]
-    cursos_seleccionados = st.multiselect("Cursos", cursos_opciones)
-
-    cursos_finales = [c for c in cursos_seleccionados if c != "[OTRO CURSO]"]
-
-    if "[OTRO CURSO]" in cursos_seleccionados:
-        otro_curso = st.text_input("Escriba el nombre del curso")
-        if otro_curso.strip():
-            cursos_finales.append(otro_curso.strip())
-
-    capacitadores_opciones = CAPACITADORES_POR_AREA[area] + ["[OTRO CAPACITADOR]"]
-    cap_sel = st.selectbox("Capacitador", capacitadores_opciones)
-
-    if cap_sel == "[OTRO CAPACITADOR]":
-        capacitador = st.text_input("Nombre del capacitador")
-    else:
-        capacitador = cap_sel
-
-
-# =========================================================
-# FECHAS
-# =========================================================
-st.markdown("## Fechas de capacitación")
-
-fecha_inicial = st.date_input("Fecha inicial", datetime.today())
-
-modo_fechas = st.radio(
-    "Modo de fechas",
-    ["Automático", "Manual"],
-    horizontal=True
-)
-
-fechas_cursos = []
-
-if cursos_finales:
-    if modo_fechas == "Automático":
-        fechas_cursos = generar_fechas_automaticas(cursos_finales, fecha_inicial)
-
-        st.markdown("### Fechas asignadas automáticamente")
-        for curso, fecha in zip(cursos_finales, fechas_cursos):
-            st.write(f"**{curso}** → {fecha.strftime('%d/%m/%Y')}")
-    else:
-        st.markdown("### Asigna una fecha por curso")
-        for i, curso in enumerate(cursos_finales):
-            fecha_manual = st.date_input(
-                f"Fecha para: {curso}",
-                value=fecha_inicial,
-                key=f"fecha_manual_{i}"
-            )
-            fechas_cursos.append(fecha_manual)
-
-
-# =========================================================
-# CARGA DE EMPLEADOS
-# =========================================================
-st.markdown("## Cargar relación de empleados")
-
-archivo_empleados = st.file_uploader(
-    "Sube la relación de empleados (.xlsx)",
-    type=["xlsx"]
-)
-
-df_empleados = None
-df_seleccionados = pd.DataFrame()
-
-if archivo_empleados is not None:
-    firma_archivo = f"{archivo_empleados.name}_{archivo_empleados.size}"
-
-    if st.session_state.last_file_signature != firma_archivo:
-        st.session_state.selected_ids = set()
-        st.session_state.nombre_search_reset += 1
-        st.session_state.last_file_signature = firma_archivo
-        st.session_state.pdf_bytes = None
-        st.session_state.pdf_filename = None
-        st.session_state.pdf_generado = False
-
-    try:
-        df_raw = pd.read_excel(archivo_empleados)
-
-        # Validar columnas obligatorias reales
-        columnas_obligatorias = ["Nombrecompleto", "CURP", "Puesto"]
-        faltantes = [c for c in columnas_obligatorias if c not in df_raw.columns]
-        if faltantes:
-            st.error(f"Faltan columnas obligatorias en el Excel: {', '.join(faltantes)}")
-            st.stop()
-
-        df_empleados = preparar_dataframe(df_raw)
-
-        st.success(f"Archivo cargado correctamente. Total de registros: {len(df_empleados)}")
-
-        st.markdown("## Filtros de empleados")
-
-        filtro = st.radio(
-            "Filtrar por:",
-            ["Sucursal", "Buscar por nombre"],
-            horizontal=True
-        )
-
-        df_filtrado = df_empleados.iloc[0:0].copy()
-
-        # -------- FILTRO SUCURSAL --------
-        if filtro == "Sucursal":
-            if "Sucursal" in df_empleados.columns:
-                sucursales = sorted(
-                    df_empleados["Sucursal"].dropna().astype(str).unique().tolist()
-                )
-
-                sucursales_seleccionadas = st.multiselect(
-                    "Selecciona una o varias sucursales",
-                    sucursales
-                )
-
-                if sucursales_seleccionadas:
-                    df_filtrado = df_empleados[
-                        df_empleados["Sucursal"].astype(str).isin(sucursales_seleccionadas)
-                    ].copy()
-
-                    df_filtrado = df_filtrado.sort_values("__display_name")
-                    st.success(f"Empleados encontrados en las sucursales seleccionadas: {len(df_filtrado)}")
-                else:
-                    st.info("Selecciona al menos una sucursal para ver empleados.")
-            else:
-                st.warning("No se encontró la columna 'Sucursal' en el archivo.")
-
-        # -------- FILTRO NOMBRE --------
-        elif filtro == "Buscar por nombre":
-            if "__display_name" in df_empleados.columns:
-                nombres_disponibles = sorted(
-                    df_empleados["__display_name"]
-                    .dropna()
-                    .astype(str)
-                    .unique()
-                    .tolist()
-                )
-
-                nombre_elegido = st.selectbox(
-                    "Buscar y seleccionar nombre",
-                    options=[None] + nombres_disponibles,
-                    format_func=lambda x: "Empieza a escribir el nombre..." if x is None else x,
-                    key=f"nombre_busqueda_select_{st.session_state.nombre_search_reset}"
-                )
-
-                if nombre_elegido:
-                    df_filtrado = df_empleados[
-                        df_empleados["__display_name"].astype(str) == nombre_elegido
-                    ].copy()
-
-                    df_filtrado = df_filtrado.sort_values("__display_name")
-
-                    nuevos_ids = set(df_filtrado["__uid"].tolist())
-                    antes = len(st.session_state.selected_ids)
-
-                    st.session_state.selected_ids.update(nuevos_ids)
-                    st.session_state.nombre_search_reset += 1
-
-                    despues = len(st.session_state.selected_ids)
-
-                    if despues > antes:
-                        st.rerun()
-                    else:
-                        st.success(f"'{nombre_elegido}' ya estaba agregado en participantes seleccionados.")
-                else:
-                    st.info("Haz clic en el campo y empieza a escribir para buscar.")
-            else:
-                st.warning("No se encontró columna de nombre para búsqueda.")
-
-        # -------- SELECCIÓN DE PARTICIPANTES --------
-        st.markdown("## Selección de participantes")
-
-        if filtro == "Sucursal" and not df_filtrado.empty:
-            col_btn1, col_btn2 = st.columns(2)
-
-            if col_btn1.button("Seleccionar Todos"):
-                st.session_state.selected_ids.update(df_filtrado["__uid"].tolist())
-                st.rerun()
-
-            if col_btn2.button("Deseleccionar Todos"):
-                for uid in df_filtrado["__uid"].tolist():
-                    st.session_state.selected_ids.discard(uid)
-                st.rerun()
-
-            st.write(f"**Seleccionados acumulados:** {len(st.session_state.selected_ids)}")
-
-            for _, row in df_filtrado.iterrows():
-                uid = row["__uid"]
-                nombre = row["__display_name"]
-
-                marcado = uid in st.session_state.selected_ids
-
-                valor = st.checkbox(
-                    nombre,
-                    value=marcado,
-                    key=f"chk_{uid}"
-                )
-
-                if valor:
-                    st.session_state.selected_ids.add(uid)
-                else:
-                    st.session_state.selected_ids.discard(uid)
-
-        elif filtro == "Buscar por nombre":
-            st.info("Al seleccionar un nombre en la búsqueda, se agrega automáticamente a participantes seleccionados.")
-
-        # -------- MOSTRAR SELECCIONADOS --------
-        st.markdown("## Participantes seleccionados")
-
-        df_seleccionados = df_empleados[
-            df_empleados["__uid"].isin(st.session_state.selected_ids)
-        ].copy()
-
-        df_seleccionados = df_seleccionados.sort_values("__display_name")
-
-        if not df_seleccionados.empty:
-            st.write(f"**Total seleccionados:** {len(df_seleccionados)}")
-
-            for _, row in df_seleccionados.iterrows():
-                uid = row["__uid"]
-                nombre = row["__display_name"]
-
-                c1, c2 = st.columns([6, 1])
-                c1.write(f"✓ {nombre}")
-
-                if c2.button("Eliminar", key=f"rm_{uid}"):
-                    st.session_state.selected_ids.discard(uid)
-                    st.rerun()
+        if test_width <= max_width:
+            current_line = test_line
         else:
-            st.info("Aún no has seleccionado participantes.")
+            lines.append(current_line)
+            current_line = word
 
-    except Exception as e:
-        st.error(f"No se pudo leer el archivo Excel: {e}")
+    lines.append(current_line)
+
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+
+        last = lines[-1]
+
+        while (
+            canvas_obj.stringWidth(
+                last + "...",
+                font_name,
+                font_size
+            ) > max_width
+            and len(last) > 0
+        ):
+            last = last[:-1].rstrip()
+
+        lines[-1] = last + "..."
+
+    return lines
+
+
+def draw_text_in_box(
+    c,
+    text,
+    x,
+    y,
+    width,
+    font_name="Helvetica",
+    font_size=9.5,
+    max_lines=2,
+    line_spacing=11,
+    single_line_y_shift=0
+):
+    """
+    Dibuja texto dentro de un área de ancho fijo.
+
+    Si cabe en una línea, puede moverse verticalmente con
+    single_line_y_shift.
+
+    Si no cabe, utiliza hasta dos líneas.
+    """
+
+    c.setFont(font_name, font_size)
+
+    lines = split_text_to_lines(
+        text=text,
+        canvas_obj=c,
+        font_name=font_name,
+        font_size=font_size,
+        max_width=width,
+        max_lines=max_lines
+    )
+
+    if len(lines) == 1:
+        y_base = y + single_line_y_shift
+    else:
+        y_base = y
+
+    for i, line in enumerate(lines):
+        c.drawString(
+            x,
+            y_base - (i * line_spacing),
+            line
+        )
+
+
+def draw_text_in_box_centered(
+    c,
+    text,
+    x_left,
+    x_right,
+    y_bottom,
+    y_top,
+    font_name="Helvetica",
+    font_size=7.5,
+    max_lines=2,
+    line_spacing=8
+):
+    """
+    Dibuja texto centrado horizontalmente dentro de un área.
+
+    Si ocupa dos líneas, ambas quedan centradas.
+    También centra verticalmente el bloque dentro del área.
+    """
+
+    width = x_right - x_left
+    c.setFont(font_name, font_size)
+
+    lines = split_text_to_lines(
+        text=text,
+        canvas_obj=c,
+        font_name=font_name,
+        font_size=font_size,
+        max_width=width,
+        max_lines=max_lines
+    )
+
+    y_center = (y_bottom + y_top) / 2
+    total_block_height = (len(lines) - 1) * line_spacing
+    start_y = y_center + (total_block_height / 2)
+
+    for i, line in enumerate(lines):
+        line_width = c.stringWidth(
+            line,
+            font_name,
+            font_size
+        )
+
+        x_line = x_left + (width - line_width) / 2
+        y_line = start_y - (i * line_spacing)
+
+        c.drawString(
+            x_line,
+            y_line,
+            line
+        )
+
+
+def draw_text_centered_single_line(
+    c,
+    text,
+    x_left,
+    x_right,
+    y,
+    font_name="Helvetica",
+    font_size=9.5
+):
+    """
+    Dibuja una sola línea centrada horizontalmente
+    dentro de un área.
+    """
+
+    c.setFont(font_name, font_size)
+
+    text = str(text)
+
+    text_width = c.stringWidth(
+        text,
+        font_name,
+        font_size
+    )
+
+    area_width = x_right - x_left
+    x = x_left + (area_width - text_width) / 2
+
+    c.drawString(x, y, text)
 
 
 # =========================================================
-# RESUMEN EN SIDEBAR
+# FECHA
 # =========================================================
-with st.sidebar:
-    st.markdown("---")
-    st.subheader("Resumen de selección")
+def normalizar_fecha(fecha):
+    """
+    Acepta:
 
-    st.write(f"**Empresa:** {empresa}")
-    st.write(f"**Área:** {area}")
-    st.write(f"**Cursos seleccionados:** {len(cursos_finales)}")
-    st.write(f"**Capacitador:** {capacitador}")
-    st.write(f"**Modo de fechas:** {modo_fechas}")
-    st.write(f"**Participantes seleccionados:** {len(st.session_state.selected_ids)}")
+    - date
+    - datetime
+    - texto YYYY-MM-DD
+    - texto DD/MM/YYYY
 
-    if cursos_finales:
-        st.markdown("**Cursos elegidos:**")
-        for curso in cursos_finales:
-            st.write(f"- {curso}")
+    Devuelve:
+    (año, mes en texto, día)
+    """
 
-    st.markdown("---")
-    st.caption("Barra fija de acciones")
+    if isinstance(fecha, datetime):
+        fecha_obj = fecha.date()
 
+    elif isinstance(fecha, date):
+        fecha_obj = fecha
 
-# =========================================================
-# GENERACIÓN MASIVA + PDF FINAL
-# =========================================================
-if btn_generar:
-    errores = []
+    elif isinstance(fecha, str):
+        fecha = fecha.strip()
 
-    if not cursos_finales:
-        errores.append("Debes seleccionar al menos un curso.")
+        try:
+            fecha_obj = datetime.strptime(
+                fecha,
+                "%Y-%m-%d"
+            ).date()
 
-    if not capacitador or not str(capacitador).strip():
-        errores.append("Debes indicar un capacitador.")
-
-    if archivo_empleados is None:
-        errores.append("Debes cargar la relación de empleados.")
-
-    if archivo_empleados is not None and len(st.session_state.selected_ids) == 0:
-        errores.append("Debes seleccionar al menos un participante.")
-
-    if errores:
-        progreso_placeholder.progress(0)
-        estado_placeholder.error("No se puede generar todavía.")
-        descarga_placeholder.info("Completa los datos para habilitar la generación.")
-
-        st.error("No se puede generar todavía. Revisa lo siguiente:")
-        for error in errores:
-            st.write(f"- {error}")
+        except ValueError:
+            fecha_obj = datetime.strptime(
+                fecha,
+                "%d/%m/%Y"
+            ).date()
 
     else:
-        try:
-            if df_seleccionados.empty:
-                raise ValueError("No se encontraron participantes seleccionados.")
+        raise ValueError("Formato de fecha no soportado.")
 
-            if not fechas_cursos or len(fechas_cursos) != len(cursos_finales):
-                raise ValueError("No se pudieron resolver correctamente las fechas de los cursos.")
+    anio = str(fecha_obj.year)
+    mes = MESES_ES[fecha_obj.month]
+    dia = f"{fecha_obj.day:02d}"
 
-            nombre_plantilla = EMPRESAS[empresa]
-            fecha_por_curso = dict(zip(cursos_finales, fechas_cursos))
+    return anio, mes, dia
 
-            total_constancias = len(df_seleccionados) * len(cursos_finales)
-            contador = 0
-            writer_final = PdfWriter()
 
-            estado_placeholder.info("Generando constancias...")
+# =========================================================
+# OVERLAY REAL
+# =========================================================
+def crear_overlay_dc3(
+    page_width,
+    page_height,
+    nombre_completo,
+    curp,
+    puesto,
+    curso,
+    empresa_capacitadora,
+    capacitador_firma,
+    fecha
+):
+    """
+    Crea la capa PDF con los datos reales sobre la página 1.
 
-            for _, participante in df_seleccionados.iterrows():
-                nombre_completo = participante["Nombrecompleto"]
-                curp = participante["CURP"]
-                puesto = participante["Puesto"]
+    empresa_capacitadora:
+        Texto que aparece en el renglón del capacitador.
 
-                for curso in cursos_finales:
-                    fecha_constancia = fecha_por_curso[curso]
+    capacitador_firma:
+        Nombre completo del capacitador que aparece
+        en el apartado de firma.
+    """
 
-                    nombre_archivo = f"{safe_filename(nombre_completo)}__{safe_filename(curso)}.pdf"
+    packet = BytesIO()
 
-                    ruta_pdf = generar_dc3(
-                        nombre_completo=nombre_completo,
-                        curp=curp,
-                        puesto=puesto,
-                        curso=curso,
-                        capacitador=capacitador,
-                        fecha=fecha_constancia,
-                        nombre_plantilla=nombre_plantilla,
-                        output_filename=nombre_archivo
-                    )
+    c = canvas.Canvas(
+        packet,
+        pagesize=(page_width, page_height)
+    )
 
-                    with open(ruta_pdf, "rb") as f_pdf:
-                        reader_temp = PdfReader(f_pdf)
-                        for page in reader_temp.pages:
-                            writer_final.add_page(page)
+    # -----------------------------------------------------
+    # DATOS PRINCIPALES
+    # -----------------------------------------------------
+    c.setFont("Helvetica", 9.5)
 
-                    # Borrar PDF individual después de agregarlo
-                    ruta_tmp = Path(ruta_pdf)
-                    if ruta_tmp.exists():
-                        ruta_tmp.unlink()
+    # Nombre del participante
+    c.drawString(
+        30,
+        615,
+        str(nombre_completo)
+    )
 
-                    contador += 1
-                    progreso = int((contador / total_constancias) * 100)
-                    progreso_placeholder.progress(progreso)
-                    estado_placeholder.info(f"Generando {contador} de {total_constancias} constancias...")
+    # CURP
+    c.drawString(
+        30,
+        585,
+        str(curp)
+    )
 
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            nombre_final = f"DC3_FINAL_{safe_filename(empresa)}_{timestamp}.pdf"
-            ruta_final = OUTPUT_DIR / nombre_final
+    # Puesto
+    c.drawString(
+        30,
+        555,
+        str(puesto)
+    )
 
-            with open(ruta_final, "wb") as f_out:
-                writer_final.write(f_out)
+    # -----------------------------------------------------
+    # RENGLÓN DEL CAPACITADOR
+    # -----------------------------------------------------
+    # Normalmente aparecerá:
+    # DIFARMER, PHARMACEUTIX u OPEFAR.
+    #
+    # Si el capacitador es Sergio González,
+    # aparecerá su nombre completo.
+    c.drawString(
+        30,
+        325,
+        str(empresa_capacitadora)
+    )
 
-            with open(ruta_final, "rb") as f:
-                st.session_state.pdf_bytes = f.read()
+    # -----------------------------------------------------
+    # CURSO EN ÁREA DE TEXTO
+    # -----------------------------------------------------
+    CURSO_X = 30
+    CURSO_Y = 425
+    CURSO_WIDTH = 520
 
-            st.session_state.pdf_filename = nombre_final
-            st.session_state.pdf_generado = True
+    draw_text_in_box(
+        c,
+        text=str(curso),
+        x=CURSO_X,
+        y=CURSO_Y,
+        width=CURSO_WIDTH,
+        font_name="Helvetica",
+        font_size=9.5,
+        max_lines=2,
+        line_spacing=11,
+        single_line_y_shift=-10
+    )
 
-            progreso_placeholder.progress(100)
-            estado_placeholder.success("PDF FINAL generado correctamente.")
+    # -----------------------------------------------------
+    # NOMBRE COMPLETO DEL CAPACITADOR EN LA FIRMA
+    # -----------------------------------------------------
+    # Área:
+    # x = 40 a 190
+    # y = 220 a 240
+    draw_text_in_box_centered(
+        c,
+        text=str(capacitador_firma),
+        x_left=40,
+        x_right=190,
+        y_bottom=220,
+        y_top=240,
+        font_name="Helvetica",
+        font_size=7.5,
+        max_lines=2,
+        line_spacing=8
+    )
 
-            descarga_placeholder.download_button(
-                "⬇ Descargar PDF FINAL",
-                data=st.session_state.pdf_bytes,
-                file_name=st.session_state.pdf_filename,
-                mime="application/pdf",
-                use_container_width=True,
-                key="download_pdf_final"
+    # -----------------------------------------------------
+    # FECHA 1 Y FECHA 2
+    # -----------------------------------------------------
+    anio, mes, dia = normalizar_fecha(fecha)
+
+    y_fecha = 385
+    desplazamiento_segunda_fecha = 165
+
+    # Primera fecha: año
+    draw_text_centered_single_line(
+        c,
+        anio,
+        x_left=270,
+        x_right=310,
+        y=y_fecha,
+        font_name="Helvetica",
+        font_size=9.5
+    )
+
+    # Primera fecha: mes
+    draw_text_centered_single_line(
+        c,
+        mes,
+        x_left=320,
+        x_right=380,
+        y=y_fecha,
+        font_name="Helvetica",
+        font_size=9.5
+    )
+
+    # Primera fecha: día
+    draw_text_centered_single_line(
+        c,
+        dia,
+        x_left=390,
+        x_right=420,
+        y=y_fecha,
+        font_name="Helvetica",
+        font_size=9.5
+    )
+
+    # Segunda fecha: año
+    draw_text_centered_single_line(
+        c,
+        anio,
+        x_left=270 + desplazamiento_segunda_fecha,
+        x_right=310 + desplazamiento_segunda_fecha,
+        y=y_fecha,
+        font_name="Helvetica",
+        font_size=9.5
+    )
+
+    # Segunda fecha: mes
+    draw_text_centered_single_line(
+        c,
+        mes,
+        x_left=320 + desplazamiento_segunda_fecha,
+        x_right=380 + desplazamiento_segunda_fecha,
+        y=y_fecha,
+        font_name="Helvetica",
+        font_size=9.5
+    )
+
+    # Segunda fecha: día
+    draw_text_centered_single_line(
+        c,
+        dia,
+        x_left=390 + desplazamiento_segunda_fecha,
+        x_right=420 + desplazamiento_segunda_fecha,
+        y=y_fecha,
+        font_name="Helvetica",
+        font_size=9.5
+    )
+
+    c.save()
+    packet.seek(0)
+
+    return packet
+
+
+# =========================================================
+# OVERLAY GRID
+# =========================================================
+def crear_overlay_grid(
+    page_width,
+    page_height,
+    step=10
+):
+    """
+    Crea una rejilla de coordenadas para ayudarte
+    a ubicar los campos.
+    """
+
+    packet = BytesIO()
+
+    c = canvas.Canvas(
+        packet,
+        pagesize=(page_width, page_height)
+    )
+
+    # Líneas verticales
+    for x in range(
+        0,
+        int(page_width) + 1,
+        step
+    ):
+        c.setStrokeColor(lightgrey)
+        c.setLineWidth(0.2)
+        c.line(x, 0, x, page_height)
+
+        if x % 50 == 0:
+            c.setFillColor(red)
+            c.setFont("Helvetica", 6)
+
+            c.drawString(
+                x + 1,
+                page_height - 10,
+                str(x)
             )
 
-            st.success("✅ Se generó el PDF final con todas las constancias.")
-            st.info(
-                f"Participantes: {len(df_seleccionados)} | "
-                f"Cursos: {len(cursos_finales)} | "
-                f"Constancias generadas: {total_constancias}"
+            c.drawString(
+                x + 1,
+                2,
+                str(x)
             )
 
-        except Exception as e:
-            progreso_placeholder.progress(0)
-            estado_placeholder.error("Ocurrió un error al generar.")
-            st.error(f"Error al generar el PDF final: {e}")
+    # Líneas horizontales
+    for y in range(
+        0,
+        int(page_height) + 1,
+        step
+    ):
+        c.setStrokeColor(lightgrey)
+        c.setLineWidth(0.2)
+        c.line(0, y, page_width, y)
+
+        if y % 50 == 0:
+            c.setFillColor(blue)
+            c.setFont("Helvetica", 6)
+
+            c.drawString(
+                2,
+                y + 1,
+                str(y)
+            )
+
+            c.drawString(
+                page_width - 28,
+                y + 1,
+                str(y)
+            )
+
+    c.setFillColor(red)
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(5, 5, "(0,0)")
+
+    c.save()
+    packet.seek(0)
+
+    return packet
+
+
+# =========================================================
+# GENERACIÓN REAL
+# =========================================================
+def generar_dc3(
+    nombre_completo,
+    curp,
+    puesto,
+    curso,
+    capacitador,
+    fecha,
+    nombre_plantilla="DIFARMER_base.pdf",
+    output_filename="dc3_generada.pdf"
+):
+    """
+    Genera una constancia DC3 real:
+
+    - Usa la plantilla PDF base.
+    - Llena solamente la página 1.
+    - Conserva intacta la página 2.
+    - Mantiene los mismos parámetros de la aplicación.
+    - Coloca la empresa según la plantilla.
+    - Coloca el nombre completo del capacitador en la firma.
+
+    Excepción:
+    Si el nombre del capacitador contiene Sergio González,
+    su nombre completo aparece tanto en el renglón del
+    capacitador como en el apartado de firma.
+    """
+
+    plantilla_path = TEMPLATES_DIR / nombre_plantilla
+
+    if not plantilla_path.exists():
+        raise FileNotFoundError(
+            f"No se encontró la plantilla: {plantilla_path}"
+        )
+
+    # -----------------------------------------------------
+    # EMPRESA SEGÚN LA PLANTILLA
+    # -----------------------------------------------------
+    empresa_capacitadora = obtener_empresa_capacitadora(
+        nombre_plantilla
+    )
+
+    # -----------------------------------------------------
+    # EXCEPCIÓN PARA SERGIO GONZÁLEZ
+    # -----------------------------------------------------
+    # El nombre se convierte a mayúsculas únicamente
+    # para realizar la comparación.
+    #
+    # En el PDF se conserva exactamente como está escrito
+    # en el catálogo o en la selección de capacitadores.
+    nombre_capacitador_mayusculas = str(
+        capacitador
+    ).strip().upper()
+
+    if (
+        "SERGIO GONZALEZ" in nombre_capacitador_mayusculas
+        or
+        "SERGIO GONZÁLEZ" in nombre_capacitador_mayusculas
+    ):
+        empresa_capacitadora = str(capacitador).strip()
+
+    # -----------------------------------------------------
+    # LEER PLANTILLA
+    # -----------------------------------------------------
+    reader = PdfReader(str(plantilla_path))
+    writer = PdfWriter()
+
+    if len(reader.pages) < 2:
+        raise ValueError(
+            "La plantilla debe tener al menos 2 páginas."
+        )
+
+    page1 = reader.pages[0]
+
+    page_width = float(
+        page1.mediabox.width
+    )
+
+    page_height = float(
+        page1.mediabox.height
+    )
+
+    # -----------------------------------------------------
+    # CREAR CAPA CON LOS DATOS
+    # -----------------------------------------------------
+    overlay_pdf = PdfReader(
+        crear_overlay_dc3(
+            page_width=page_width,
+            page_height=page_height,
+            nombre_completo=nombre_completo,
+            curp=curp,
+            puesto=puesto,
+            curso=curso,
+
+            # Empresa según la plantilla o nombre de Sergio
+            empresa_capacitadora=empresa_capacitadora,
+
+            # Nombre completo para la firma
+            capacitador_firma=capacitador,
+
+            fecha=fecha
+        )
+    )
+
+    overlay_page = overlay_pdf.pages[0]
+
+    # Combinar la información con la página 1
+    page1.merge_page(overlay_page)
+    writer.add_page(page1)
+
+    # Página 2 intacta
+    page2 = reader.pages[1]
+    writer.add_page(page2)
+
+    # -----------------------------------------------------
+    # GUARDAR PDF
+    # -----------------------------------------------------
+    output_path = OUTPUT_DIR / output_filename
+
+    with open(output_path, "wb") as f:
+        writer.write(f)
+
+    return output_path
+
+
+# =========================================================
+# GUÍA DE COORDENADAS
+# =========================================================
+def generar_guia_coordenadas(
+    nombre_plantilla="DIFARMER_base.pdf"
+):
+    """
+    Genera un PDF con una rejilla de coordenadas sobre
+    la página 1 y conserva la página 2 intacta.
+    """
+
+    plantilla_path = TEMPLATES_DIR / nombre_plantilla
+
+    if not plantilla_path.exists():
+        raise FileNotFoundError(
+            f"No se encontró la plantilla: {plantilla_path}"
+        )
+
+    reader = PdfReader(str(plantilla_path))
+    writer = PdfWriter()
+
+    if len(reader.pages) < 2:
+        raise ValueError(
+            "La plantilla debe tener al menos 2 páginas."
+        )
+
+    page1 = reader.pages[0]
+
+    page_width = float(
+        page1.mediabox.width
+    )
+
+    page_height = float(
+        page1.mediabox.height
+    )
+
+    overlay_pdf = PdfReader(
+        crear_overlay_grid(
+            page_width,
+            page_height,
+            step=10
+        )
+    )
+
+    overlay_page = overlay_pdf.pages[0]
+
+    page1.merge_page(overlay_page)
+    writer.add_page(page1)
+
+    # Página 2 intacta
+    page2 = reader.pages[1]
+    writer.add_page(page2)
+
+    output_path = (
+        OUTPUT_DIR / "dc3_guia_coordenadas.pdf"
+    )
+
+    with open(output_path, "wb") as f:
+        writer.write(f)
+
+    return output_path
+
+
+# =========================================================
+# PRUEBA LOCAL
+# =========================================================
+if __name__ == "__main__":
+    ruta = generar_dc3(
+        nombre_completo="BOCANEGRA JAVIER DE DIOS",
+        curp="BOCJ900101HSRXXX00",
+        puesto="AUXILIAR DE FORMACION Y DESARROLLO",
+        curso="BRIGADAS MULTIFUNCIONALES",
+
+        # Para probar la excepción, cambia este valor
+        # por el nombre completo de Sergio tal como aparece
+        # en tu catálogo de capacitadores.
+        capacitador="SERGIO GONZALEZ",
+
+        fecha="03/06/2026",
+        nombre_plantilla="DIFARMER_base.pdf",
+        output_filename="dc3_real_prueba.pdf"
+    )
+
+    print(
+        f"PDF real de prueba generado en: {ruta}"
+    )
+
+    ruta_guia = generar_guia_coordenadas()
+
+    print(
+        f"Guía de coordenadas generada en: {ruta_guia}"
+    )
