@@ -42,7 +42,7 @@ MESES_ES = {
 def obtener_empresa_capacitadora(nombre_plantilla):
     """
     Determina el nombre de la empresa que debe aparecer
-    en el renglón de capacitador de acuerdo con la plantilla.
+    en el renglón del capacitador según la plantilla utilizada.
 
     DIFARMER     -> DIFARMER
     PHARMACEUTIX -> PHARMACEUTIX
@@ -64,8 +64,25 @@ def obtener_empresa_capacitadora(nombre_plantilla):
     if "OPEFAR" in referencia:
         return "OPEFAR"
 
-    # Si aparece una plantilla distinta, evita dejar el campo vacío.
+    # Valor predeterminado para otras plantillas
     return "OPEFAR"
+
+
+# =========================================================
+# VALIDACIÓN DE SERGIO GONZALEZ GAMEZ
+# =========================================================
+def es_sergio_gonzalez(capacitador):
+    """
+    Detecta al capacitador Sergio Gonzalez Gamez aunque
+    el nombre contenga el registro STPS o tenga acentos.
+    """
+
+    nombre = str(capacitador).strip().upper()
+
+    return (
+        "SERGIO GONZALEZ GAMEZ" in nombre
+        or "SERGIO GONZÁLEZ GAMEZ" in nombre
+    )
 
 
 # =========================================================
@@ -82,8 +99,8 @@ def split_text_to_lines(
     """
     Divide un texto en líneas según el ancho máximo.
 
-    Si excede max_lines, recorta la última línea con puntos
-    suspensivos.
+    Si excede max_lines, recorta la última línea
+    y agrega puntos suspensivos.
     """
 
     words = str(text).split()
@@ -146,10 +163,11 @@ def draw_text_in_box(
     """
     Dibuja texto dentro de un área de ancho fijo.
 
-    Si cabe en una línea, se puede mover verticalmente con
-    single_line_y_shift.
+    Si cabe en una línea, se puede mover verticalmente
+    con single_line_y_shift.
 
-    Si no cabe, utiliza hasta dos líneas.
+    Si no cabe, utiliza hasta el número de líneas
+    indicado en max_lines.
     """
 
     c.setFont(font_name, font_size)
@@ -191,12 +209,16 @@ def draw_text_in_box_centered(
     """
     Dibuja texto centrado horizontalmente dentro de un área.
 
-    Si ocupa dos líneas, ambas quedan centradas.
+    Si ocupa dos líneas, ambas líneas quedan centradas.
     También centra verticalmente el bloque dentro del área.
     """
 
     width = x_right - x_left
-    c.setFont(font_name, font_size)
+
+    c.setFont(
+        font_name,
+        font_size
+    )
 
     lines = split_text_to_lines(
         text=text,
@@ -242,7 +264,10 @@ def draw_text_centered_single_line(
     dentro de un área.
     """
 
-    c.setFont(font_name, font_size)
+    c.setFont(
+        font_name,
+        font_size
+    )
 
     text = str(text)
 
@@ -255,7 +280,11 @@ def draw_text_centered_single_line(
     area_width = x_right - x_left
     x = x_left + (area_width - text_width) / 2
 
-    c.drawString(x, y, text)
+    c.drawString(
+        x,
+        y,
+        text
+    )
 
 
 # =========================================================
@@ -296,7 +325,9 @@ def normalizar_fecha(fecha):
             ).date()
 
     else:
-        raise ValueError("Formato de fecha no soportado.")
+        raise ValueError(
+            "Formato de fecha no soportado."
+        )
 
     anio = str(fecha_obj.year)
     mes = MESES_ES[fecha_obj.month]
@@ -323,12 +354,11 @@ def crear_overlay_dc3(
     Crea la capa PDF con los datos reales sobre la página 1.
 
     empresa_capacitadora:
-        Nombre de la empresa que aparece en el renglón
-        del capacitador.
+        Texto que aparece en el renglón del capacitador.
 
     capacitador_firma:
         Nombre completo del capacitador que aparece
-        en el apartado de firma.
+        en el apartado de la firma.
     """
 
     packet = BytesIO()
@@ -341,7 +371,10 @@ def crear_overlay_dc3(
     # -----------------------------------------------------
     # DATOS PRINCIPALES
     # -----------------------------------------------------
-    c.setFont("Helvetica", 9.5)
+    c.setFont(
+        "Helvetica",
+        9.5
+    )
 
     # Nombre del participante
     c.drawString(
@@ -365,18 +398,7 @@ def crear_overlay_dc3(
     )
 
     # -----------------------------------------------------
-    # EMPRESA EN EL RENGLÓN DE CAPACITADOR
-    # -----------------------------------------------------
-    # Aquí aparecerá:
-    # DIFARMER, PHARMACEUTIX u OPEFAR
-    c.drawString(
-        30,
-        325,
-        str(empresa_capacitadora)
-    )
-
-    # -----------------------------------------------------
-    # CURSO EN ÁREA DE TEXTO
+    # CURSO
     # -----------------------------------------------------
     CURSO_X = 30
     CURSO_Y = 425
@@ -396,11 +418,36 @@ def crear_overlay_dc3(
     )
 
     # -----------------------------------------------------
-    # NOMBRE COMPLETO DEL CAPACITADOR EN LA FIRMA
+    # RENGLÓN DEL CAPACITADOR
     # -----------------------------------------------------
-    # Área de la firma:
-    # x = 40 a 190
-    # y = 220 a 240
+    # Para capacitadores normales aparecerá:
+    # DIFARMER, PHARMACEUTIX u OPEFAR.
+    #
+    # Para Sergio Gonzalez Gamez aparecerá:
+    # SERGIO GONZALEZ GAMEZ - REGISTRO STPS...
+    #
+    # Se usa un área de texto para evitar que el texto
+    # largo de Sergio se salga de la página.
+    draw_text_in_box(
+        c,
+        text=str(empresa_capacitadora),
+        x=30,
+        y=325,
+        width=520,
+        font_name="Helvetica",
+        font_size=9.5,
+        max_lines=2,
+        line_spacing=11,
+        single_line_y_shift=0
+    )
+
+    # -----------------------------------------------------
+    # FIRMA DEL CAPACITADOR
+    # -----------------------------------------------------
+    # El nombre completo del capacitador aparecerá centrado.
+    #
+    # Para Sergio también aparecerá el nombre completo
+    # con su registro STPS.
     draw_text_in_box_centered(
         c,
         text=str(capacitador_firma),
@@ -415,7 +462,7 @@ def crear_overlay_dc3(
     )
 
     # -----------------------------------------------------
-    # FECHA 1 Y FECHA 2
+    # FECHAS
     # -----------------------------------------------------
     anio, mes, dia = normalizar_fecha(fecha)
 
@@ -489,14 +536,13 @@ def crear_overlay_dc3(
     )
 
     c.save()
-
     packet.seek(0)
 
     return packet
 
 
 # =========================================================
-# OVERLAY GRID
+# OVERLAY DE REJILLA
 # =========================================================
 def crear_overlay_grid(
     page_width,
@@ -504,7 +550,7 @@ def crear_overlay_grid(
     step=10
 ):
     """
-    Crea una rejilla de coordenadas para ayudarte
+    Crea una rejilla de coordenadas para ayudar
     a ubicar los campos.
     """
 
@@ -523,16 +569,26 @@ def crear_overlay_grid(
     ):
         c.setStrokeColor(lightgrey)
         c.setLineWidth(0.2)
-        c.line(x, 0, x, page_height)
+        c.line(
+            x,
+            0,
+            x,
+            page_height
+        )
 
         if x % 50 == 0:
             c.setFillColor(red)
-            c.setFont("Helvetica", 6)
+            c.setFont(
+                "Helvetica",
+                6
+            )
+
             c.drawString(
                 x + 1,
                 page_height - 10,
                 str(x)
             )
+
             c.drawString(
                 x + 1,
                 2,
@@ -547,16 +603,27 @@ def crear_overlay_grid(
     ):
         c.setStrokeColor(lightgrey)
         c.setLineWidth(0.2)
-        c.line(0, y, page_width, y)
+
+        c.line(
+            0,
+            y,
+            page_width,
+            y
+        )
 
         if y % 50 == 0:
             c.setFillColor(blue)
-            c.setFont("Helvetica", 6)
+            c.setFont(
+                "Helvetica",
+                6
+            )
+
             c.drawString(
                 2,
                 y + 1,
                 str(y)
             )
+
             c.drawString(
                 page_width - 28,
                 y + 1,
@@ -564,8 +631,16 @@ def crear_overlay_grid(
             )
 
     c.setFillColor(red)
-    c.setFont("Helvetica-Bold", 8)
-    c.drawString(5, 5, "(0,0)")
+    c.setFont(
+        "Helvetica-Bold",
+        8
+    )
+
+    c.drawString(
+        5,
+        5,
+        "(0,0)"
+    )
 
     c.save()
     packet.seek(0)
@@ -589,13 +664,29 @@ def generar_dc3(
     """
     Genera una constancia DC3 real.
 
-    Mantiene los mismos parámetros que utilizaba la aplicación.
+    Funcionamiento normal:
 
-    El parámetro capacitador conserva el nombre completo de
-    la persona capacitadora y se utiliza en la firma.
+    - Plantilla DIFARMER:
+      En el renglón aparece DIFARMER.
 
-    La empresa que aparece en el renglón del capacitador se
-    determina automáticamente con nombre_plantilla.
+    - Plantilla PHARMACEUTIX:
+      En el renglón aparece PHARMACEUTIX.
+
+    - Plantilla FARMASI:
+      En el renglón aparece OPEFAR.
+
+    - Plantilla DABRA:
+      En el renglón aparece OPEFAR.
+
+    En la firma siempre aparece el nombre completo
+    del capacitador seleccionado.
+
+    Excepción:
+
+    Si el capacitador seleccionado es Sergio Gonzalez Gamez,
+    su nombre completo y su registro STPS aparecerán tanto
+    en el renglón del capacitador como en el apartado
+    de la firma.
     """
 
     plantilla_path = TEMPLATES_DIR / nombre_plantilla
@@ -605,12 +696,26 @@ def generar_dc3(
             f"No se encontró la plantilla: {plantilla_path}"
         )
 
-    # Obtener automáticamente la empresa capacitadora
+    # -----------------------------------------------------
+    # OBTENER EMPRESA SEGÚN LA PLANTILLA
+    # -----------------------------------------------------
     empresa_capacitadora = obtener_empresa_capacitadora(
         nombre_plantilla
     )
 
-    reader = PdfReader(str(plantilla_path))
+    # -----------------------------------------------------
+    # EXCEPCIÓN PARA SERGIO GONZALEZ GAMEZ
+    # -----------------------------------------------------
+    if es_sergio_gonzalez(capacitador):
+        empresa_capacitadora = str(capacitador).strip()
+
+    # -----------------------------------------------------
+    # LEER PLANTILLA
+    # -----------------------------------------------------
+    reader = PdfReader(
+        str(plantilla_path)
+    )
+
     writer = PdfWriter()
 
     if len(reader.pages) < 2:
@@ -628,6 +733,9 @@ def generar_dc3(
         page1.mediabox.height
     )
 
+    # -----------------------------------------------------
+    # CREAR CAPA DE DATOS
+    # -----------------------------------------------------
     overlay_pdf = PdfReader(
         crear_overlay_dc3(
             page_width=page_width,
@@ -637,7 +745,7 @@ def generar_dc3(
             puesto=puesto,
             curso=curso,
 
-            # Empresa basada en la plantilla
+            # Empresa según plantilla o nombre de Sergio
             empresa_capacitadora=empresa_capacitadora,
 
             # Nombre completo para la firma
@@ -649,16 +757,31 @@ def generar_dc3(
 
     overlay_page = overlay_pdf.pages[0]
 
-    page1.merge_page(overlay_page)
-    writer.add_page(page1)
+    # Combinar datos con la primera página
+    page1.merge_page(
+        overlay_page
+    )
+
+    writer.add_page(
+        page1
+    )
 
     # Página 2 intacta
     page2 = reader.pages[1]
-    writer.add_page(page2)
 
+    writer.add_page(
+        page2
+    )
+
+    # -----------------------------------------------------
+    # GUARDAR PDF
+    # -----------------------------------------------------
     output_path = OUTPUT_DIR / output_filename
 
-    with open(output_path, "wb") as f:
+    with open(
+        output_path,
+        "wb"
+    ) as f:
         writer.write(f)
 
     return output_path
@@ -671,8 +794,10 @@ def generar_guia_coordenadas(
     nombre_plantilla="DIFARMER_base.pdf"
 ):
     """
-    Genera un PDF con una rejilla de coordenadas sobre
-    la página 1 y conserva la página 2 intacta.
+    Genera un PDF con una rejilla de coordenadas
+    sobre la página 1.
+
+    La página 2 se conserva intacta.
     """
 
     plantilla_path = TEMPLATES_DIR / nombre_plantilla
@@ -682,7 +807,10 @@ def generar_guia_coordenadas(
             f"No se encontró la plantilla: {plantilla_path}"
         )
 
-    reader = PdfReader(str(plantilla_path))
+    reader = PdfReader(
+        str(plantilla_path)
+    )
+
     writer = PdfWriter()
 
     if len(reader.pages) < 2:
@@ -710,18 +838,29 @@ def generar_guia_coordenadas(
 
     overlay_page = overlay_pdf.pages[0]
 
-    page1.merge_page(overlay_page)
-    writer.add_page(page1)
+    page1.merge_page(
+        overlay_page
+    )
+
+    writer.add_page(
+        page1
+    )
 
     # Página 2 intacta
     page2 = reader.pages[1]
-    writer.add_page(page2)
+
+    writer.add_page(
+        page2
+    )
 
     output_path = (
         OUTPUT_DIR / "dc3_guia_coordenadas.pdf"
     )
 
-    with open(output_path, "wb") as f:
+    with open(
+        output_path,
+        "wb"
+    ) as f:
         writer.write(f)
 
     return output_path
@@ -737,14 +876,14 @@ if __name__ == "__main__":
         puesto="AUXILIAR DE FORMACION Y DESARROLLO",
         curso="BRIGADAS MULTIFUNCIONALES",
 
-        # Este nombre aparecerá en la firma
-        capacitador="ANA PAOLA PADILLA QUINTERO",
+        # Prueba de Sergio Gonzalez Gamez
+        capacitador=(
+            "SERGIO GONZALEZ GAMEZ - "
+            "REGISTRO STPS GOGS9108108SI-0005"
+        ),
 
         fecha="03/06/2026",
-
-        # Esta plantilla hará que en el renglón aparezca DIFARMER
         nombre_plantilla="DIFARMER_base.pdf",
-
         output_filename="dc3_real_prueba.pdf"
     )
 
